@@ -27,39 +27,42 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: [24.10.6, master]
-        include:
+        release: ["24.10.6", master]
+        platform:
           # ---- aarch64 family ----
-          - platform: aarch64_generic
-            binary_id: aarch64-generic
-          - platform: aarch64_cortex-a53
-            binary_id: aarch64-cortex-a53
-          - platform: aarch64_cortex-a72
-            binary_id: aarch64-cortex-a72
-          - platform: aarch64_cortex-a76
-            binary_id: aarch64-cortex-a76
+          - aarch64_generic
+          - aarch64_cortex-a53
+          - aarch64_cortex-a72
+          - aarch64_cortex-a76
           # ---- x86_64 ----
-          - platform: x86_64
-            binary_id: x86_64
+          - x86_64
           # ---- ARMv7 family — one binary fans out to 9 platforms ----
-          - platform: arm_cortex-a7
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a7_vfpv4
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a7_neon-vfpv4
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a5_vfpv4
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a8_vfpv3
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a9
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a9_vfpv3-d16
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a9_neon
-            binary_id: armv7-baseline
-          - platform: arm_cortex-a15_neon-vfpv4
-            binary_id: armv7-baseline
+          - arm_cortex-a7
+          - arm_cortex-a7_vfpv4
+          - arm_cortex-a7_neon-vfpv4
+          - arm_cortex-a5_vfpv4
+          - arm_cortex-a8_vfpv3
+          - arm_cortex-a9
+          - arm_cortex-a9_vfpv3-d16
+          - arm_cortex-a9_neon
+          - arm_cortex-a15_neon-vfpv4
+        include:
+          # binary_id is merged into all (release, platform) combinations
+          # where platform matches — giving 14×2 = 28 jobs total.
+          - { platform: aarch64_generic,       binary_id: aarch64-generic    }
+          - { platform: aarch64_cortex-a53,    binary_id: aarch64-cortex-a53 }
+          - { platform: aarch64_cortex-a72,    binary_id: aarch64-cortex-a72 }
+          - { platform: aarch64_cortex-a76,    binary_id: aarch64-cortex-a76 }
+          - { platform: x86_64,                binary_id: x86_64             }
+          - { platform: arm_cortex-a7,         binary_id: armv7-baseline     }
+          - { platform: arm_cortex-a7_vfpv4,   binary_id: armv7-baseline     }
+          - { platform: arm_cortex-a7_neon-vfpv4, binary_id: armv7-baseline  }
+          - { platform: arm_cortex-a5_vfpv4,   binary_id: armv7-baseline     }
+          - { platform: arm_cortex-a8_vfpv3,   binary_id: armv7-baseline     }
+          - { platform: arm_cortex-a9,         binary_id: armv7-baseline     }
+          - { platform: arm_cortex-a9_vfpv3-d16, binary_id: armv7-baseline   }
+          - { platform: arm_cortex-a9_neon,    binary_id: armv7-baseline     }
+          - { platform: arm_cortex-a15_neon-vfpv4, binary_id: armv7-baseline }
 
     steps:
       - name: Checkout openpulse-openwrt feed
