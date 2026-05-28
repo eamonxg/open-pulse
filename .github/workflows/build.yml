@@ -75,6 +75,9 @@ jobs:
           file openpulse-server/prebuilt-bin/openpulse-server
           ls -lh openpulse-server/prebuilt-bin/openpulse-server
 
+      - name: Create artifacts directory
+        run: mkdir -p ${{ github.workspace }}/artifacts
+
       - name: Build .ipk via OpenWrt SDK
         uses: openwrt/gh-action-sdk@main
         env:
