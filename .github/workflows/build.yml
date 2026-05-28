@@ -4,58 +4,190 @@ on:
   push:
     branches: ["main"]
     tags: ["v*"]
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+env:
+  OPENPULSE_REPO: eamonxg/openpulse
+  OPENPULSE_REF: main
+
 jobs:
-  build:
-    name: ${{ matrix.arch }}-${{ matrix.release }}
+  # =========================================================================
+  # Stage 1: build Rust binaries with cross-rs.
+  # One job per (Rust target × CPU tuning) combination. Each job uploads one
+  # binary artifact that one or more stage-2 jobs will consume.
+  # =========================================================================
+  build-rust:
+    name: ${{ matrix.binary_id }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- aarch64 (4 variants, all share aarch64-unknown-linux-musl) ---
+          - binary_id: aarch64-generic
+            rust_target: aarch64-unknown-linux-musl
+            rustflags: ""
+          - binary_id: aarch64-cortex-a53
+            rust_target: aarch64-unknown-linux-musl
+            rustflags: "-C target-cpu=cortex-a53"
+          - binary_id: aarch64-cortex-a72
+            rust_target: aarch64-unknown-linux-musl
+            rustflags: "-C target-cpu=cortex-a72"
+          - binary_id: aarch64-cortex-a76
+            rust_target: aarch64-unknown-linux-musl
+            rustflags: "-C target-cpu=cortex-a76"
+          # --- x86_64 ---
+          - binary_id: x86_64
+            rust_target: x86_64-unknown-linux-musl
+            rustflags: ""
+          # --- armv7 baseline (VFPv3-D16, no NEON; covers 9 OpenWrt arches) ---
+          - binary_id: armv7-baseline
+            rust_target: armv7-unknown-linux-musleabihf
+            rustflags: ""
+
+    steps:
+      - name: Checkout openpulse source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.OPENPULSE_REPO }}
+          ref: ${{ env.OPENPULSE_REF }}
+          path: openpulse
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross-rs
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build with cross
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: |
+          cd openpulse/apps/server
+          cross build --release --target ${{ matrix.rust_target }} -p openpulse-server
+
+      - name: Verify binary exists and is the expected arch
+        run: |
+          BIN="openpulse/apps/server/target/${{ matrix.rust_target }}/release/openpulse-server"
+          test -f "$BIN" || { echo "binary not produced at $BIN"; exit 1; }
+          file "$BIN"
+          ls -lh "$BIN"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpulse-binary-${{ matrix.binary_id }}
+          path: openpulse/apps/server/target/${{ matrix.rust_target }}/release/openpulse-server
+          retention-days: 7
+          if-no-files-found: error
+
+  # =========================================================================
+  # Stage 2: per-OpenWrt-arch packaging. Each row downloads the matching
+  # binary from stage 1 and runs openwrt/gh-action-sdk to produce a .ipk.
+  # 14 OpenWrt arches × 2 OpenWrt releases = 28 jobs.
+  # =========================================================================
+  build-openwrt-package:
+    name: ${{ matrix.platform }}-${{ matrix.release }}
+    needs: build-rust
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         release: [24.10.6, master]
-        arch:
-          - aarch64_cortex-a53
-          - aarch64_generic
-          - x86_64
-          - mipsel_24kc
-          - mips_24kc
-          - arm_cortex-a7_neon-vfpv4
+        include:
+          # ---- aarch64 family ----
+          - platform: aarch64_generic
+            binary_id: aarch64-generic
+          - platform: aarch64_cortex-a53
+            binary_id: aarch64-cortex-a53
+          - platform: aarch64_cortex-a72
+            binary_id: aarch64-cortex-a72
+          - platform: aarch64_cortex-a76
+            binary_id: aarch64-cortex-a76
+          # ---- x86_64 ----
+          - platform: x86_64
+            binary_id: x86_64
+          # ---- ARMv7 family — one binary fans out to 9 platforms ----
+          - platform: arm_cortex-a7
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a7_vfpv4
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a7_neon-vfpv4
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a5_vfpv4
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a8_vfpv3
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a9
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a9_vfpv3-d16
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a9_neon
+            binary_id: armv7-baseline
+          - platform: arm_cortex-a15_neon-vfpv4
+            binary_id: armv7-baseline
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout openpulse-openwrt feed
+        uses: actions/checkout@v4
 
-      - name: Build
+      - name: Download prebuilt Rust binary
+        uses: actions/download-artifact@v4
+        with:
+          name: openpulse-binary-${{ matrix.binary_id }}
+          path: prebuilt/
+
+      - name: Place binary into package prebuilt-bin/ directory
+        run: |
+          mkdir -p openpulse-server/prebuilt-bin
+          cp prebuilt/openpulse-server openpulse-server/prebuilt-bin/openpulse-server
+          chmod +x openpulse-server/prebuilt-bin/openpulse-server
+          echo "--- prebuilt binary ---"
+          file openpulse-server/prebuilt-bin/openpulse-server
+          ls -lh openpulse-server/prebuilt-bin/openpulse-server
+
+      - name: Build .ipk via OpenWrt SDK
         uses: openwrt/gh-action-sdk@main
         env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.release }}
+          ARCH: ${{ matrix.platform }}-${{ matrix.release }}
           ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
           FEED_DIR: ${{ github.workspace }}
           PACKAGES: openpulse-server
           V: s
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload .ipk artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: openpulse-server-${{ matrix.arch }}-${{ matrix.release }}
+          name: openpulse-server-${{ matrix.platform }}-${{ matrix.release }}
           path: |
-            artifacts/bin/packages/${{ matrix.arch }}/**/*.ipk
-            artifacts/bin/packages/${{ matrix.arch }}/**/*.apk
-          if-no-files-found: warn
+            artifacts/bin/packages/${{ matrix.platform }}/**/*.ipk
+            artifacts/bin/packages/${{ matrix.platform }}/**/*.apk
+          if-no-files-found: error
 
+  # =========================================================================
+  # Release: gather every .ipk and publish to GitHub Releases on tag push.
+  # =========================================================================
   release:
-    needs: build
+    needs: build-openwrt-package
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all .ipk artifacts
+        uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+          pattern: openpulse-server-*
           path: dist/
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           name: openpulse-server-${{ github.ref_name }}
           files: dist/**/*.[ai]pk
