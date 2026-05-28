@@ -101,22 +101,41 @@ jobs:
           if-no-files-found: error
 
   # =========================================================================
-  # Release: gather every .ipk and publish to GitHub Releases on tag push.
+  # Release: gather every .ipk/.apk and publish to GitHub Releases on tag.
+  # Release body is fetched from eamonxg/assets at the matching tag path.
   # =========================================================================
   release:
     needs: build-openwrt-package
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
-      - name: Download all .ipk artifacts
+      - name: Download all package artifacts
         uses: actions/download-artifact@v4
         with:
           merge-multiple: true
           pattern: openpulse-server-*
           path: dist/
 
+      - name: Fetch release changelog from assets repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          BODY_PATH="openpulse-openwrt/docs/changelog/${TAG}.md"
+          OUT=".release-body.md"
+          if gh api "repos/eamonxg/assets/contents/${BODY_PATH}" --jq '.content' \
+              | base64 -d > "$OUT" 2>/dev/null && [ -s "$OUT" ]; then
+            echo "Loaded changelog for ${TAG}"
+          else
+            echo "No changelog found for ${TAG}, using empty body" >&2
+            : > "$OUT"
+          fi
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: openpulse-server-${{ github.ref_name }}
+          body_path: .release-body.md
+          draft: false
+          prerelease: false
           files: dist/**/*.[ai]pk
